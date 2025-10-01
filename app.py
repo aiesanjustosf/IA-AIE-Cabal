@@ -15,7 +15,8 @@ with left:
     if os.path.exists(PAGE_ICON):
         st.image(PAGE_ICON, use_container_width=True)
 with right:
-    st.title("Resumen de importes")  # título pedido
+    st.title(APP_TITLE)   # título principal correcto
+    st.caption("Procesar resúmenes automáticos de tarjeta Cabal/Credicoop")
 
 st.markdown('<hr style="margin:8px 0 20px 0;">', unsafe_allow_html=True)
 
@@ -31,8 +32,6 @@ if st.button("Procesar y generar informe") and pdf_file is not None:
             resumen = extract_resumen_from_bytes(pdf_file.getvalue())
 
             # 2) Ocultar SOLAMENTE la fila '-IVA (21% en Débitos al Comercio)'
-            #    - captura guion normal '-' y guion Unicode '−'
-            #    - ignora espacios al inicio
             mask_menos_iva = resumen["Concepto"].str.contains(
                 r"^\s*[−-]\s*IVA\b", flags=re.IGNORECASE, regex=True
             )
@@ -43,6 +42,7 @@ if st.button("Procesar y generar informe") and pdf_file is not None:
             if "Monto Total" in df_display.columns:
                 df_display["Monto Total"] = df_display["Monto Total"].apply(format_money)
 
+            st.subheader("Resumen de importes")
             st.dataframe(df_display, use_container_width=True)
 
             # 4) Generar PDF con el mismo filtrado y TÍTULO pedido
