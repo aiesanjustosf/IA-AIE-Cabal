@@ -1,21 +1,55 @@
+import os
+import re
 import streamlit as st
-from backend import extract_resumen_from_bytes, build_report_pdf
+from backend import extract_resumen_from_bytes, build_report_pdf, format_money  # usamos tu format_money
 
-st.set_page_config(page_title="IA AIE - Control Tarjeta Cabal Credicoop", page_icon="📄", layout="centered")
-st.title("IA AIE - Control Tarjeta Cabal Credicoop")
-st.caption("Subí el PDF y descargá el informe (solo resumen de importes).")
+APP_TITLE = "IA AIE - Control Tarjeta Cabal Credicoop"
+PAGE_ICON  = "logo_aie.jpg"  # asegurate de subir este archivo al repo
+MAX_MB    = 50
 
-titulo = st.text_input("Título del informe", value="IA AIE - Control Tarjeta Cabal Credicoop")
+st.set_page_config(page_title=APP_TITLE, page_icon=PAGE_ICON, layout="centered")
+
+# Encabezado
+left, right = st.columns([1, 3])
+with left:
+    if os.path.exists(PAGE_ICON):
+        st.image(PAGE_ICON, use_container_width=True)
+with right:
+    st.title(APP_TITLE)
+    st.caption("Subí el PDF y descargá el informe (solo resumen de importes).")
+
+st.markdown('<hr style="margin:8px 0 20px 0;">', unsafe_allow_html=True)
+
 pdf_file = st.file_uploader("📄 PDF de Cabal/Credicoop", type=["pdf"])
 
 if st.button("✅ Procesar y generar informe") and pdf_file is not None:
-    with st.spinner("Procesando..."):
-        resumen = extract_resumen_from_bytes(pdf_file.getvalue())
-        st.subheader("📊 Resumen")
-        st.dataframe(resumen)
+    size_mb = len(pdf_file.getvalue()) / (1024 * 1024)
+    if size_mb > MAX_MB:
+        st.error(f"El archivo supera {MAX_MB} MB.")
+    else:
+        with st.spinner("Procesando..."):
+            # 1) Usar TUS cálculos originales
+            resumen = extract_resumen_from_bytes(pdf_file.getvalue())
 
-        out_path = "Informe_Cabal.pdf"
-        build_report_pdf(resumen, out_path, titulo=titulo)
+            # 2) Ocultar SOLAMENTE la fila '-IVA (21% en Débitos al Comercio)'
+            mask_menos_iva = resumen["Concepto"].str.contains(r"^-\\s*IVA", flags=re.IGNORECASE, regex=True)
+            resumen_filtrado = resumen.loc[~mask_menos_iva].reset_index(drop=True)
 
-        with open(out_path, "rb") as f:
-            st.download_button("⬇️ Descargar informe PDF", f, file_name="IA_AIE_Control_Tarjeta_Cabal_Credicoop.pdf", mime="application/pdf")
+            # 3) Mostrar tabla con separador de miles (en pantalla únicamente)
+            df_display = resumen_filtrado.copy()
+            df_display["Monto Total"] = df_display["Monto Total"].apply(format_money)
+
+            st.subheader("Resumen de importes")
+            st.dataframe(df_display, use_container_width=True)
+
+            # 4) Generar PDF con el mismo filtrado y título pedido
+            out_path = "IA_AIE_Resumen_de_Importes.pdf"
+            build_report_pdf(resumen_filtrado, out_path, titulo="Resumen de importes")
+            with open(out_path, "rb") as f:
+                st.download_button("⬇️ Descargar informe PDF", f, file_name=out_path, mime="application/pdf")
+
+            # Limpieza
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
