@@ -10,44 +10,83 @@ from reportlab.lib import colors
 
 
 def _to_float(s: str) -> float:
-    return float(s.replace('.', '').replace(',', '.'))
+    # "1.234,56" -> 1234.56
+    return float(s.replace(".", "").replace(",", "."))
 
 def _fmt_money(x: float) -> str:
+    # 1234.56 -> "1.234,56"
     return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def extract_resumen_from_bytes(pdf_bytes: bytes) -> pd.DataFrame:
+    """
+    Devuelve DataFrame con 6 filas:
+      1) Base Neto Arancel (21%)
+      2) IVA 21% sobre Arancel (incluye -IVA)
+      3) Base Neto Costo Financiero (10,5%)
+      4) IVA 10,5% sobre Costo Financiero
+      5) Percepciones IVA RG 333
+      6) Retenciones de Ingresos Brutos
+
+    NOTA:
+    - El renglón "-IVA (21% en Débitos al Comercio)" NO se muestra.
+    - Su importe se suma dentro de "IVA 21% sobre Arancel".
+    """
     tmp_path = "_aie_input.pdf"
     with open(tmp_path, "wb") as f:
         f.write(pdf_bytes)
 
-    rx_iva21_arancel = re.compile(r"IVA\s*S/ARANCEL\s*DE\s*DESCUENTO\s*21,00%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
-    rx_minus_iva21 = re.compile(r"[−-]\s*IVA\s*21,00%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
-    rx_iva105_costo = re.compile(r"IVA\s*S/COSTO\s*FINANCIERO\s*10,50%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
-    rx_perc_rg333 = re.compile(r"PERCEPCION\s*DE\s*IVA\s*RG\s*333[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
-    rx_ret_iibb = re.compile(r"RETENCION\s*DE\s*INGRESOS\s*BR[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
+    # Patrones
+    rx_iva21_arancel = re.compile(
+        r"IVA\s*S/ARANCEL\s*DE\s*DESCUENTO\s*21,00%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})",
+        re.IGNORECASE
+    )
+    rx_minus_iva21 = re.compile(  # -IVA 21% (Débitos al Comercio)
+        r"[−-]\s*IVA\s*21,00%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})",
+        re.IGNORECASE
+    )
+    rx_iva105_costo = re.compile(
+        r"IVA\s*S/COSTO\s*FINANCIERO\s*10,50%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})",
+        re.IGNORECASE
+    )
+    rx_perc_rg333 = re.compile(
+        r"PERCEPCION\s*DE\s*IVA\s*RG\s*333[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})",
+        re.IGNORECASE
+    )
+    rx_ret_iibb = re.compile(
+        r"RETENCION\s*DE\s*INGRESOS\s*BR[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})",
+        re.IGNORECASE
+    )
 
     tot_iva_arancel = 0.0
     tot_iva_costo = 0.0
     tot_percep = 0.0
     tot_ret_ib = 0.0
-    tot_menos_iva = 0.0
+    tot_menos_iva = 0.0  # se suma dentro del IVA 21%
 
     with pdfplumber.open(tmp_path) as pdf:
         for page in pdf.pages:
             txt = (page.extract_text() or "").replace("−", "-")
+            # IVA 21% s/Arancel
             for m in rx_iva21_arancel.finditer(txt):
                 tot_iva_arancel += _to_float(m.group(1))
+            # -IVA 21% (Débitos al Comercio) -> sumar dentro de IVA 21%
             for m in rx_minus_iva21.finditer(txt):
                 tot_menos_iva += _to_float(m.group(1))
+            # IVA 10,5% s/Costo Financiero
             for m in rx_iva105_costo.finditer(txt):
                 tot_iva_costo += _to_float(m.group(1))
+            # Percepciones
             for m in rx_perc_rg333.finditer(txt):
                 tot_percep += _to_float(m.group(1))
+            # Retenciones IIBB
             for m in rx_ret_iibb.finditer(txt):
                 tot_ret_ib += _to_float(m.group(1))
 
+    # IVA 21% final (incluye -IVA)
     tot_iva_21_final = tot_iva_arancel + tot_menos_iva
+
+    # Bases calculadas desde los IVAs
     base_arancel = round(tot_iva_21_final / 0.21, 2) if tot_iva_21_final else 0.0
     base_costo = round(tot_iva_costo / 0.105, 2) if tot_iva_costo else 0.0
 
@@ -71,6 +110,11 @@ def extract_resumen_from_bytes(pdf_bytes: bytes) -> pd.DataFrame:
     })
 
     return resumen
+
+
+# Alias para compatibilidad con app.py existentes
+def extract_summary(pdf_bytes: bytes) -> pd.DataFrame:
+    return extract_resumen_from_bytes(pdf_bytes)
 
 
 def build_pdf(resumen_df: pd.DataFrame, out_path: str, titulo: str):
@@ -105,7 +149,6 @@ def build_pdf(resumen_df: pd.DataFrame, out_path: str, titulo: str):
     ]))
     story.append(tbl)
 
-    # Sin firma (pedido explícito)
-
+    # Sin firma
     doc.build(story)
     return out_path
