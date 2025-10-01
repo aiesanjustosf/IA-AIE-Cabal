@@ -1,58 +1,55 @@
+import re
+import datetime
+import pdfplumber
+import pandas as pd
 
-import re, datetime, pdfplumber, pandas as pd
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
-def _to_float(s: str) -> float:
-    return float(s.replace(".", "").replace(",", "."))
 
-def _fmt(x: float) -> str:
+def _to_float(s: str) -> float:
+    return float(s.replace('.', '').replace(',', '.'))
+
+def _fmt_money(x: float) -> str:
     return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def extract_summary(pdf_bytes: bytes) -> pd.DataFrame:
-    """
-    Reads the whole PDF and returns a 6-row summary:
-      1. Base Neto Arancel 21%
-      2. IVA 21% sobre Arancel (incluye -IVA en Debitos al Comercio)
-      3. Base Neto Costo Financiero 10,5%
-      4. IVA 10,5% sobre Costo Financiero
-      5. Percepciones IVA RG 333
-      6. Retenciones de Ingresos Brutos
-    Note: The '-IVA 21%' line is not shown separately.
-    """
-    tmp = "_aie_input.pdf"
-    with open(tmp, "wb") as f:
+
+def extract_resumen_from_bytes(pdf_bytes: bytes) -> pd.DataFrame:
+    tmp_path = "_aie_input.pdf"
+    with open(tmp_path, "wb") as f:
         f.write(pdf_bytes)
 
     rx_iva21_arancel = re.compile(r"IVA\s*S/ARANCEL\s*DE\s*DESCUENTO\s*21,00%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
-    rx_minus_iva21  = re.compile(r"[−-]\s*IVA\s*21,00%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
+    rx_minus_iva21 = re.compile(r"[−-]\s*IVA\s*21,00%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
     rx_iva105_costo = re.compile(r"IVA\s*S/COSTO\s*FINANCIERO\s*10,50%[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
-    rx_perc_rg333   = re.compile(r"PERCEPCION\s*DE\s*IVA\s*RG\s*333[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
-    rx_ret_iibb     = re.compile(r"RETENCION\s*DE\s*INGRESOS\s*BR[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
+    rx_perc_rg333 = re.compile(r"PERCEPCION\s*DE\s*IVA\s*RG\s*333[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
+    rx_ret_iibb = re.compile(r"RETENCION\s*DE\s*INGRESOS\s*BR[^0-9]*(\d{1,3}(?:\.\d{3})*,\d{2})", re.IGNORECASE)
 
-    iva21_total = 0.0
-    iva105_total = 0.0
-    perc_total = 0.0
-    ret_total = 0.0
+    tot_iva_arancel = 0.0
+    tot_iva_costo = 0.0
+    tot_percep = 0.0
+    tot_ret_ib = 0.0
+    tot_menos_iva = 0.0
 
-    with pdfplumber.open(tmp) as pdf:
+    with pdfplumber.open(tmp_path) as pdf:
         for page in pdf.pages:
-            text = (page.extract_text() or "").replace("−", "-")
-            for m in rx_iva21_arancel.finditer(text):
-                iva21_total += _to_float(m.group(1))
-            for m in rx_minus_iva21.finditer(text):
-                iva21_total += _to_float(m.group(1))
-            for m in rx_iva105_costo.finditer(text):
-                iva105_total += _to_float(m.group(1))
-            for m in rx_perc_rg333.finditer(text):
-                perc_total += _to_float(m.group(1))
-            for m in rx_ret_iibb.finditer(text):
-                ret_total += _to_float(m.group(1))
+            txt = (page.extract_text() or "").replace("−", "-")
+            for m in rx_iva21_arancel.finditer(txt):
+                tot_iva_arancel += _to_float(m.group(1))
+            for m in rx_minus_iva21.finditer(txt):
+                tot_menos_iva += _to_float(m.group(1))
+            for m in rx_iva105_costo.finditer(txt):
+                tot_iva_costo += _to_float(m.group(1))
+            for m in rx_perc_rg333.finditer(txt):
+                tot_percep += _to_float(m.group(1))
+            for m in rx_ret_iibb.finditer(txt):
+                tot_ret_ib += _to_float(m.group(1))
 
-    base21 = round(iva21_total / 0.21, 2) if iva21_total else 0.0
-    base105 = round(iva105_total / 0.105, 2) if iva105_total else 0.0
+    tot_iva_21_final = tot_iva_arancel + tot_menos_iva
+    base_arancel = round(tot_iva_21_final / 0.21, 2) if tot_iva_21_final else 0.0
+    base_costo = round(tot_iva_costo / 0.105, 2) if tot_iva_costo else 0.0
 
     resumen = pd.DataFrame({
         "Concepto": [
@@ -63,16 +60,18 @@ def extract_summary(pdf_bytes: bytes) -> pd.DataFrame:
             "Percepciones IVA RG 333",
             "Retenciones de Ingresos Brutos",
         ],
-        "Monto": [
-            round(base21, 2),
-            round(iva21_total, 2),
-            round(base105, 2),
-            round(iva105_total, 2),
-            round(perc_total, 2),
-            round(ret_total, 2),
+        "Monto Total": [
+            round(base_arancel, 2),
+            round(tot_iva_21_final, 2),
+            round(base_costo, 2),
+            round(tot_iva_costo, 2),
+            round(tot_percep, 2),
+            round(tot_ret_ib, 2),
         ]
     })
+
     return resumen
+
 
 def build_pdf(resumen_df: pd.DataFrame, out_path: str, titulo: str):
     styles = getSampleStyleSheet()
@@ -82,14 +81,16 @@ def build_pdf(resumen_df: pd.DataFrame, out_path: str, titulo: str):
 
     doc = SimpleDocTemplate(out_path, pagesize=A4)
     story = []
+
     story.append(Paragraph(titulo, title_style))
     story.append(Paragraph(f"Generado: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}", normal))
     story.append(Spacer(1, 12))
 
     story.append(Paragraph("Resumen de importes", h2))
+
     data = [["Concepto", "Monto ($)"]]
     for _, row in resumen_df.iterrows():
-        data.append([row["Concepto"], _fmt(float(row["Monto"]))])
+        data.append([row["Concepto"], _fmt_money(float(row["Monto Total"]))])
 
     tbl = Table(data, colWidths=[360, 140])
     tbl.setStyle(TableStyle([
@@ -104,8 +105,7 @@ def build_pdf(resumen_df: pd.DataFrame, out_path: str, titulo: str):
     ]))
     story.append(tbl)
 
-    story.append(Spacer(1, 24))
-    story.append(Paragraph("AIE – Diseñado por Alfonso Alderete", normal))
+    # Sin firma (pedido explícito)
 
     doc.build(story)
     return out_path
