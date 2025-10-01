@@ -1,5 +1,6 @@
-
-import streamlit as st, os
+import os
+import re
+import streamlit as st
 from backend import extract_summary, build_pdf
 
 TITLE = "IA AIE - Control Tarjeta Cabal Credicoop"
@@ -7,9 +8,11 @@ MAX_MB = 50
 
 st.set_page_config(page_title=TITLE, page_icon="logo_aie.jpg", layout="centered")
 
+# Encabezado con logo
 left, right = st.columns([1,3])
 with left:
-    st.image("logo_aie.jpg", use_container_width=True)
+    if os.path.exists("logo_aie.jpg"):
+        st.image("logo_aie.jpg", use_container_width=True)
 with right:
     st.title(TITLE)
     st.caption("No subas documentos con datos sensibles. El procesamiento es temporal y no se guarda ningún archivo en servidores propios.")
@@ -25,18 +28,22 @@ if st.button("Procesar y generar informe") and pdf_file is not None:
     else:
         with st.spinner("Procesando..."):
             resumen = extract_summary(pdf_file.getvalue())
-            df_show = resumen.copy()
-            df_show["Monto"] = df_show["Monto"].apply(lambda v: f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
-            st.subheader("Resumen de importes (6 ítems)")
-            st.dataframe(df_show, use_container_width=True)
 
-            out_path = "IA_AIE_Control_Tarjeta_Cabal_Credicoop.pdf"
-            build_pdf(resumen, out_path, titulo=TITLE)
+            # Filtrar fuera la fila '-IVA ...'
+            mask_menos_iva = resumen["Concepto"].str.contains(r"-\s*IVA", flags=re.IGNORECASE, regex=True)
+            resumen_filtrado = resumen.loc[~mask_menos_iva].reset_index(drop=True)
+
+            # Mostrar tabla
+            st.subheader("Resumen de importes")
+            st.dataframe(resumen_filtrado, use_container_width=True)
+
+            # Generar PDF
+            out_path = "IA_AIE_Resumen_de_Importes.pdf"
+            build_pdf(resumen_filtrado, out_path, titulo="Resumen de importes")
             with open(out_path, "rb") as f:
                 st.download_button("⬇️ Descargar informe PDF", f, file_name=out_path, mime="application/pdf")
 
             try:
-                os.remove("_aie_input.pdf")
                 os.remove(out_path)
             except OSError:
                 pass
