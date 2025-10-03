@@ -3,7 +3,7 @@ import re
 import streamlit as st
 from backend import extract_resumen_from_bytes, build_report_pdf, format_money
 
-APP_TITLE = "IA AIE - Control Tarjeta Cabal Credicoop"
+APP_TITLE = "IA AIE - Control Tarjeta Cabal Débito y Crédito"
 PAGE_ICON  = "logo_aie.jpg"
 MAX_MB     = 50
 
@@ -16,7 +16,7 @@ with left:
         st.image(PAGE_ICON, use_container_width=True)
 with right:
     st.title(APP_TITLE)   # título principal correcto
-    st.caption("Procesar resúmenes automáticos de tarjeta Cabal/Credicoop")
+    st.caption("Procesar resúmenes automáticos de tarjeta Cabal")
 
 st.markdown('<hr style="margin:8px 0 20px 0;">', unsafe_allow_html=True)
 
