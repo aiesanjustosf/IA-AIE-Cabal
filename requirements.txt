@@ -2,3 +2,4 @@ streamlit
 pdfplumber
 reportlab
 pandas
+xlsxwriter
